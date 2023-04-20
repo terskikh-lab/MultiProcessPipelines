@@ -1,0 +1,1 @@
+-e git+https://github.com/sbp-terskikh-lab/MultiProcessTools.git@f6fb48e42e824853a441da8fcb06bee3a98c23f3#egg=MultiProcessTools
