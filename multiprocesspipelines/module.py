@@ -10,6 +10,7 @@ import logging
 import hashlib
 import pickle
 import os
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,19 @@ def process_summary(process):
 class Module(MultiProcessHelper):
     def __init__(
         self,
-        name,
-        output_directory,
-        loggers,
+        name: str,
+        output_directory: str,
+        loggers: list,
     ):
+        if not isinstance(name, str):
+            raise ValueError(f"name must be a string but {type(name)} was given")
+        if not isinstance(output_directory, str):
+            raise ValueError(
+                f"output_directory must be a string but {type(output_directory)} was given"
+            )
+        if not isinstance(loggers, list):
+            raise ValueError(f"loggers must be a list but {type(loggers)} was given")
+        loggers = [__name__, "MultiProcessTools", *loggers]
         super().__init__(
             name=name,
             working_directory=os.path.join(output_directory, name),
@@ -74,7 +84,7 @@ class Module(MultiProcessHelper):
     def processes_list(self):
         return [process for process in self._processes.keys()]
 
-    def set_file_information_iterable(self, function):
+    def set_file_information_iterable(self, function, *args, **kwargs):
         if isinstance(function, Callable):
             if hasattr(function, "outputs"):
                 if "file_information_iterable" not in function.outputs["args"]:

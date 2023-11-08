@@ -1,4 +1,8 @@
-from .tag_factory import output_tag_factory, input_tag_factory
+from typing import Callable, TypeVar, ParamSpec
+from functools import partial
+
+T = TypeVar("T")
+P = ParamSpec("P")
 
 
 def inputs(*args, **kwargs):
