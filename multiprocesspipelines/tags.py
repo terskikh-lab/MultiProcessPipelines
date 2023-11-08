@@ -1,15 +1,53 @@
 from .tag_factory import output_tag_factory, input_tag_factory
 
 
-outputs_file_information_iterator = output_tag_factory(
-    "outputs_file_information_iterator", "file_information_iterator"
-)
-outputs_file_information_iterator.__doc__ = """ Decorator to tag a function as outputting a file iterator. A file iterator is an iterator that yields file path(s) used as file_information for the first process."""
+def inputs(*args, **kwargs):
+    """
+    Decorator to specify a processes inputs, both positional and keyword arguments.
 
-recieves_file_information = input_tag_factory(
-    "recieves_file_information", "file_information"
-)
-outputs_file_information_iterator.__doc__ = """ Decorator to tag a function as recieving a file iterator. A file iterator is an iterator that yields file path(s)."""
+    Parameters
+    ----------
+    *args
+        String names of the positional input arguments to pass to the process.
+    **kwargs
+        Keyword mapping of names from outputs of previous processes to keyword inputs of this process.
+    """
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        if hasattr(func, "inputs"):
+            raise AttributeError(f"inputs already specified for given process")
+        else:
+            func.inputs = {
+                "args": args,
+                "kwargs": kwargs,
+            }
+        return func
+
+    decorator.__name__ = "inputs"
+    return decorator
+
+
+def outputs(*args):
+    """
+    Decorator to specify a processes outputs. All outputs are by definition positional
+
+    Parameters
+    ----------
+    *args
+        Positional arguments to pass to the function.
+    """
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        if hasattr(func, "outputs"):
+            raise AttributeError(f"outputs already specified for given process")
+        else:
+            func.outputs = {
+                "args": args,
+            }
+        return func
+
+    decorator.__name__ = "outputs"
+    return decorator
 
 
 def iterate(num_iters: int, seed: int, max_workers: int = 10):
@@ -26,36 +64,18 @@ def iterate(num_iters: int, seed: int, max_workers: int = 10):
         Maximum number of workers to use for parallelization, by default 10
     """
 
-    def iterate_decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
         if hasattr(func, "iterate"):
             raise AttributeError(f"iterate already specified for given process")
         else:
-            func.iterate = True
-            func.iterate_kwargs = {
-                "num_iters": num_iters,
-                "seed": seed,
-                "max_workers": max_workers,
+            func.iterate = {
+                "kwargs": {
+                    "num_iters": num_iters,
+                    "seed": seed,
+                    "max_workers": max_workers,
+                }
             }
         return func
 
-    iterate_decorator.__name__ = "iterate"
-    return iterate_decorator
-
-
-@outputs("dataframe")
-@inputs({"dataframe":"df", "image_fov":"img_fov"})
-@iterate(num_iters=10, seed=0)
-def zscore(
-    df,
-    img_fov,
-):
-    
-    return 
-
-inputs(a1, a2):
-    intputs(func):
-        func(a1, a2)
-        
-feature_extraction.dataframe = dataframe
-
-kwargs[]
+    decorator.__name__ = "iterate"
+    return decorator
