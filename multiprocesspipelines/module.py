@@ -26,7 +26,7 @@ def _get_representation(v):
 
 
 def process_summary(process):
-    summary = [f"Process: {process.__name__}"]
+    summary = []
     summary.append("inputs:")
     summary.append("\targs:")
     if hasattr(process, "inputs"):
@@ -73,6 +73,10 @@ class Module(MultiProcessHelper):
         self._processes = {}
 
     @property
+    def output_directory(self):
+        return self.directories["working_directory"]
+
+    @property
     def methods_list(self):
         return [
             method_name
@@ -95,16 +99,33 @@ class Module(MultiProcessHelper):
                 raise AttributeError(
                     f"outputs not specified for file_information_iterable (NOTE: file_information_iterable must have 'file_information_iterable' in outputs)"
                 )
-            partial_func = partial(function, *args, **kwargs)
-            partial_func.__name__ = function.__name__
-            partial_func.outputs = function.outputs
-            self.file_information_iterable = partial_func
+            outputs = function(*args, **kwargs)
+            if (len(outputs) != len(function.outputs["args"])) and (
+                len(function.outputs["args"] > 1)
+            ):
+                raise ValueError(
+                    f"Output length does not match process output info: expected {function.outputs['args']} ({len(function.outputs['args'])}) but the process returned {len(outputs)} args"
+                )
+            for attr, val in zip(function.outputs["args"], outputs):
+                if attr is None:
+                    continue
+                if hasattr(self, attr):
+                    raise ValueError(
+                        f"file_information_iterable cannot have overlapping outputs with other processes. Overlapping output: {attr}"
+                    )
+                self.__setattr__(attr, val)
+            assert hasattr(self, "file_information_iterable")
 
             prior_names = []
-            for file_information_name, file_information in tqdm(
-                self.file_information_iterable,
+            for i, item in tqdm(
+                enumerate(self.file_information_iterable),
                 f"Checking {function.__name__} viability",
             ):
+                if len(item) != 2:
+                    raise ValueError(
+                        f"file_information_iterable must return a tuple of length 2 but {len(item)} was returned"
+                    )
+                file_information_name, file_information = item
                 if not isinstance(file_information_name, str):
                     raise ValueError(
                         f"file_information_name must be a string but {type(file_information_name)} was given"
@@ -125,6 +146,8 @@ class Module(MultiProcessHelper):
         if isinstance(function, Callable):
             partial_func = partial(function, *args, **kwargs)
             partial_func.__name__ = function.__name__
+            # Rather than partial init just create a kwargs and args attr
+            # that way we can make them mutable and keep original func methods (like func.__code__)
             if hasattr(function, "inputs") and hasattr(function, "outputs"):
                 partial_func.inputs = function.inputs
                 partial_func.outputs = function.outputs
@@ -193,6 +216,7 @@ class Module(MultiProcessHelper):
                 if file_not_in_use == False:
                     logger.debug(f"File {temp_file_name} already exists, skipping...")
                     continue
+                logger.info(f"Running {file_information_name}...")
                 self.file_information_name = file_information_name
                 self.file_information = file_information
                 self._run_all_processes()
@@ -219,13 +243,8 @@ class Module(MultiProcessHelper):
     def _run_all_processes(self):
         if len(self._processes) == 0:
             raise ValueError("No processes specified")
-        self.output_directory = self.get_directory("working_directory")
         for i, (name, process) in enumerate(self._processes.items()):
             logger.info(f"Running process {i}: {name}")
-            if (i == 0) and ("file_information" not in process.inputs):
-                raise ValueError(
-                    f"First process must have 'file_information' in inputs"
-                )
 
             args = []
             for arg in process.inputs["args"]:
@@ -248,7 +267,7 @@ class Module(MultiProcessHelper):
                     raise AttributeError(
                         f"Invalid input: {process_kwarg}={attr_name}. {attr_name} does not exist as an attribute. There may be an issue with the previous process output decorator"
                     )
-            if process.hasattr("iterate"):
+            if hasattr(process, "iterate"):
                 if any(i in kwargs.keys() for i in process.iterate["kwargs"].keys()):
                     overlapping = [
                         i
@@ -347,12 +366,13 @@ class Module(MultiProcessHelper):
                 for tempfile in self.tempfiles:
                     logger.info(tempfile)
 
-        def __repr__(self):
-            repr_parts = [f"\nModule: {self.name}"]
-            repr_parts.append("Process info:")
-            for process_name, process in self._processes.items():
-                repr_parts.append(process_summary(process))
-            return "\n".join(repr_parts)
+    def __repr__(self):
+        repr_parts = [f"\nModule: {self.name}"]
+        repr_parts.append("Process info:")
+        for i, (process_name, process) in enumerate(self._processes.items()):
+            repr_parts.append(f"Process {i}: {process_name}")
+            repr_parts.append(process_summary(process))
+        return "\n".join(repr_parts)
 
 
 # write the dunder method to show the repr of the object as a list of processes with input / output summary information
