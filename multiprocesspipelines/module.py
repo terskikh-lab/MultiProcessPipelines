@@ -52,29 +52,34 @@ class Module(MultiProcessHelper):
     def __init__(
         self,
         name: str,
-        output_directory: str,
+        output_root_directory: str,
         loggers: list,
     ):
         if not isinstance(name, str):
             raise ValueError(f"name must be a string but {type(name)} was given")
-        if not isinstance(output_directory, str):
+        if not isinstance(output_root_directory, str):
             raise ValueError(
-                f"output_directory must be a string but {type(output_directory)} was given"
+                f"output_root_directory must be a string but {type(output_root_directory)} was given"
             )
         if not isinstance(loggers, list):
             raise ValueError(f"loggers must be a list but {type(loggers)} was given")
         loggers = [__name__, "MultiProcessTools", *loggers]
         super().__init__(
             name=name,
-            working_directory=os.path.join(output_directory, name),
+            working_directory=output_root_directory,
             loggers=loggers,
         )
         self.name = name
+        self.create_directory(self.name)
         self._processes = {}
 
     @property
-    def output_directory(self):
+    def output_root_directory(self):
         return self.directories["working_directory"]
+
+    @property
+    def module_directory(self):
+        return self.get_directory(self.name)
 
     @property
     def methods_list(self):
@@ -206,8 +211,8 @@ class Module(MultiProcessHelper):
             for file_information_name, file_information in tqdm(
                 self.file_information_iterable, f"{self.name} progress"
             ):
-                temp_file_name = f"{file_information_name}.tmp"
-                final_file_name = f"{file_information_name}.fin"
+                temp_file_name = f"{file_information_name}_{self.name}.tmp"
+                final_file_name = f"{file_information_name}_{self.name}.fin"
                 file_not_in_use = self.create_temp_file(
                     final_file_name=final_file_name,
                     temp_file_name=temp_file_name,
