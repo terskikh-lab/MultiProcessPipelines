@@ -10,6 +10,8 @@ import logging
 import hashlib
 import pickle
 import os
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -316,7 +318,7 @@ class Module(MultiProcessHelper):
         seed = kwargs["seed"]
         max_workers = kwargs.pop("max_workers")
         kwargs_str = "_".join(
-            [f"{k}={get_representation(v)}" for k, v in kwargs.items()]
+            [f"{k}={_get_representation(v)}" for k, v in kwargs.items()]
         )
         label = f"{process.__name__}-{kwargs_str}"
         rng = np.random.default_rng(seed=seed)
