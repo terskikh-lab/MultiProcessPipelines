@@ -1,8 +1,5 @@
 from multiprocesstools import (
     MultiProcessHelper,
-    RunTimeCounter,
-    wait_until_file_exists,
-    run_func_IO_loop,
 )
 from typing import Union, Callable
 from functools import partial
@@ -209,37 +206,24 @@ class Module(MultiProcessHelper):
         logger.info(f"Running {self.name}...")
         # initialize run information
         try:
-            self.create_directory("file_information_tempfiles")
+            self.track_process("file_information_iterable")
             for file_information_name, file_information in tqdm(
                 self.file_information_iterable, f"{self.name} progress"
             ):
-                temp_file_name = f"{file_information_name}_{self.name}.tmp"
-                final_file_name = f"{file_information_name}_{self.name}.fin"
-                file_not_in_use = self.create_temp_file(
-                    final_file_name=final_file_name,
-                    temp_file_name=temp_file_name,
-                    path="file_information_tempfiles",
-                )
-                if file_not_in_use == False:
-                    logger.debug(f"File {temp_file_name} already exists, skipping...")
+                file_name = f"{file_information_name}_{self.name}"
+                success = self.create_process_file(file_name)
+                if success == False:
+                    logger.debug(f"File {file_name} already exists, skipping...")
                     continue
                 logger.info(f"Running {file_information_name}...")
                 self.file_information_name = file_information_name
                 self.file_information = file_information
                 self._run_all_processes()
-                open(
-                    os.path.join(
-                        self.get_directory("file_information_tempfiles"),
-                        final_file_name,
-                    ),
-                    "x",
-                ).close()
-                self.delete_tempfile(
-                    os.path.join(
-                        self.get_directory("file_information_tempfiles"),
-                        temp_file_name,
+                self.update_process_file(
+                    process_name="file_information_iterable",
+                    file_name=file_name,
+                    status="finished"
                     )
-                )
             logger.info(f"Finished running {self.name}, cleaning up...")
             self.cleanup()
         except Exception as e:
@@ -316,7 +300,7 @@ class Module(MultiProcessHelper):
             assert i in kwargs.keys(), f"{i} must be in kwargs"
         num_iters = kwargs["num_iters"]
         seed = kwargs["seed"]
-        max_workers = kwargs.pop("max_workers")
+        max_workers = kwargs["max_workers"]
         kwargs_str = "_".join(
             [f"{k}={_get_representation(v)}" for k, v in kwargs.items()]
         )
@@ -342,7 +326,9 @@ class Module(MultiProcessHelper):
                     future = executor.submit(process, **kwargs)
                     futures_dict[future] = temp_file_name
                 for i, future in tqdm(
-                    enumerate(as_completed(futures_dict)), "Progress on futures"
+                    enumerate(as_completed(futures_dict)), 
+                    desc = "Progress on futures", 
+                    total = num_iters
                 ):
                     temp_file_name = futures_dict[future]
                     result = future.result()
