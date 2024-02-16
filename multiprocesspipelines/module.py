@@ -1,15 +1,14 @@
-from multiprocesstools import (
-    MultiProcessHelper,
-)
-from typing import Union, Callable
-from functools import partial
 import logging
 import hashlib
 import pickle
 import os
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocesstools import MultiProcessHelper
+from typing import Union, Callable, Iterable
+from functools import partial
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,9 @@ def process_summary(process):
 
 
 class Module(MultiProcessHelper):
+
+    file_information_iterable: Iterable
+
     def __init__(
         self,
         name: str,
@@ -141,6 +143,8 @@ class Module(MultiProcessHelper):
                 prior_names.append(file_information_name)
             logger.info(f"{function.__name__} is a viable file_information_iterable")
 
+            self.track_process("file_information_iterable")
+
         else:
             raise ValueError(
                 f"function must be a Callable but {type(function)} was given"
@@ -170,6 +174,7 @@ class Module(MultiProcessHelper):
                         f"First process must have 'file_information' in inputs"
                     )
             self._processes[function.__name__] = partial_func
+            self.track_process(function.__name__)
         else:
             raise ValueError(
                 f"function must be a Callable but {type(function)} was given"
@@ -206,7 +211,6 @@ class Module(MultiProcessHelper):
         logger.info(f"Running {self.name}...")
         # initialize run information
         try:
-            self.track_process("file_information_iterable")
             for file_information_name, file_information in tqdm(
                 self.file_information_iterable, f"{self.name} progress"
             ):
@@ -222,8 +226,8 @@ class Module(MultiProcessHelper):
                 self.update_process_file(
                     process_name="file_information_iterable",
                     file_name=file_name,
-                    status="finished"
-                    )
+                    status="finished",
+                )
             logger.info(f"Finished running {self.name}, cleaning up...")
             self.cleanup()
         except Exception as e:
@@ -269,7 +273,6 @@ class Module(MultiProcessHelper):
                         f"iterate kwargs and process kwargs cannot overlap. Overlapping kwargs: {overlapping}"
                     )
                 kwargs.update(process.iterate["kwargs"])
-                self.create_directory("iteration_tempfiles")
                 self._run_iterations_in_parallel(process=process, *args, **kwargs)
             else:
                 output = process(*args, **kwargs)
@@ -310,54 +313,38 @@ class Module(MultiProcessHelper):
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 futures_dict = {}
                 for i in np.arange(num_iters):
-                    temp_file_name = f"{label}_iter{i}.tmp"
-                    final_file_name = temp_file_name.replace("tmp", "fin")
-                    file_not_in_use = self.create_temp_file(
-                        final_file_name=final_file_name,
-                        temp_file_name=temp_file_name,
-                        path="iteration_tempfiles",
+                    file_name = f"{label}_iter{i}"
+                    success = self.create_process_file(
+                        file_name=file_name,
+                        process_name=process.__name__,
                     )
-                    if file_not_in_use == False:
-                        logger.debug(
-                            f"File {temp_file_name} already exists, skipping..."
-                        )
+                    if success == False:
+                        logger.debug(f"File {file_name} already exists, skipping...")
                         continue
                     kwargs["seed"] = rng.integers(low=0, high=1000000)
-                    future = executor.submit(process, **kwargs)
-                    futures_dict[future] = temp_file_name
+                    future = executor.submit(process, *args, **kwargs)
+                    futures_dict[future] = file_name
                 for i, future in tqdm(
-                    enumerate(as_completed(futures_dict)), 
-                    desc = "Progress on futures", 
-                    total = num_iters
+                    enumerate(as_completed(futures_dict)),
+                    desc="Progress on futures",
+                    total=num_iters,
                 ):
-                    temp_file_name = futures_dict[future]
+                    file_name = futures_dict[future]
                     result = future.result()
                     logger.info(f"{label}: {result}")
-                    open(
-                        os.path.join(
-                            self.get_directory("iteration_tempfiles"),
-                            final_file_name,
-                        ),
-                        "x",
-                    ).close()
-                    self.delete_tempfile(
-                        os.path.join(
-                            self.get_directory("iteration_tempfiles"),
-                            temp_file_name,
-                        )
+                    self.update_process_status(
+                        process_name=process.__name__,
+                        file_name=file_name,
+                        status="finished",
                     )
                 executor.shutdown(wait=True)
         except Exception as e:
-            logger.error(e)
+            logger.error(e.with_traceback())
             self.cleanup()
             if not isinstance(e, KeyError):
                 raise e
         finally:
             logger.info(f"Finished running multiprocessing for {process.__name__}")
-            if len(self.tempfiles) > 0:
-                logger.info("Tempfiles remaining:")
-                for tempfile in self.tempfiles:
-                    logger.info(tempfile)
 
     def __repr__(self):
         repr_parts = [f"\nModule: {self.name}"]

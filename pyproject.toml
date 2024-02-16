@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.9"
-multiprocesstools = { path = "../MultiProcessTools" }
+multiprocesstools = {path = "/Users/martinak/Documents/GitHub/MultiProcessTools"}
 
 
 [build-system]
