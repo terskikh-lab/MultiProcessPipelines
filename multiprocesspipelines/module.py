@@ -67,8 +67,8 @@ class Module(MultiProcessHelper):
         loggers = [__name__, "MultiProcessTools", *loggers]
         super().__init__(
             name=name,
-            working_directory=output_root_directory,
-            loggers=loggers,
+            output_root=output_root_directory,
+            logger_names=loggers,
         )
         self.name = name
         self.create_directory(self.name)
