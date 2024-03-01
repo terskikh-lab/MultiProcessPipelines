@@ -187,7 +187,7 @@ class Module(MultiProcessHelper):
         if process in self._processes.keys():
             return self._processes[process]
         else:
-            print(
+            logger.warning(
                 f"process not in processes.\n\nGiven:{process} Processes:\n\n{self.processes_list}"
             )
 
@@ -195,7 +195,7 @@ class Module(MultiProcessHelper):
         if process in self._processes.keys():
             del self._processes[process]
         else:
-            print(
+            logger.warning(
                 f"process not in processes.\n\nGiven:{process} Processes:\n\n{self.processes_list}"
             )
 
@@ -215,7 +215,9 @@ class Module(MultiProcessHelper):
                 self.file_information_iterable, f"{self.name} progress"
             ):
                 file_name = f"{file_information_name}_{self.name}"
-                success = self.create_process_file(file_name)
+                success = self.create_process_file(
+                    process_name="file_information_iterable", file_name=file_name
+                )
                 if success == False:
                     logger.debug(f"File {file_name} already exists, skipping...")
                     continue
@@ -240,6 +242,10 @@ class Module(MultiProcessHelper):
             raise ValueError("No processes specified")
         for i, (name, process) in enumerate(self._processes.items()):
             logger.info(f"Running process {i}: {name}")
+            # Assemble all args and kwargs
+            # do this by checking if the process has inputs and outputs
+            # if it does, then we can use the inputs to get the args and kwargs
+            # and the outputs to update the attributes of the module
 
             args = []
             for arg in process.inputs["args"]:
@@ -315,8 +321,8 @@ class Module(MultiProcessHelper):
                 for i in np.arange(num_iters):
                     file_name = f"{label}_iter{i}"
                     success = self.create_process_file(
-                        file_name=file_name,
                         process_name=process.__name__,
+                        file_name=file_name,
                     )
                     if success == False:
                         logger.debug(f"File {file_name} already exists, skipping...")
@@ -329,14 +335,22 @@ class Module(MultiProcessHelper):
                     desc="Progress on futures",
                     total=num_iters,
                 ):
-                    file_name = futures_dict[future]
-                    result = future.result()
-                    logger.info(f"{label}: {result}")
-                    self.update_process_status(
-                        process_name=process.__name__,
-                        file_name=file_name,
-                        status="finished",
-                    )
+                    try:
+                        file_name = futures_dict[future]
+                        result = future.result()
+                        logger.info(f"{label}: {result}")
+                        self.update_process_status(
+                            process_name=process.__name__,
+                            file_name=file_name,
+                            status="finished",
+                        )
+                    except Exception as e:
+                        logger.exception(e)
+                        self.update_process_status(
+                            process_name=process.__name__,
+                            file_name=file_name,
+                            status="failed",
+                        )
                 executor.shutdown(wait=True)
         except Exception as e:
             logger.error(e.with_traceback())
