@@ -224,12 +224,22 @@ class Module(MultiProcessHelper):
                 logger.info(f"Running {file_information_name}...")
                 self.file_information_name = file_information_name
                 self.file_information = file_information
-                self._run_all_processes()
-                self.update_process_file(
-                    process_name="file_information_iterable",
-                    file_name=file_name,
-                    status="finished",
-                )
+                try:
+                    self._run_all_processes()
+                except Exception as e:
+                    logger.exception(e)
+                    self.update_process_file(
+                        process_name="file_information_iterable",
+                        file_name=file_name,
+                        status="failed",
+                    )
+                    continue
+                else:
+                    self.update_process_file(
+                        process_name="file_information_iterable",
+                        file_name=file_name,
+                        status="finished",
+                    )
             logger.info(f"Finished running {self.name}, cleaning up...")
             self.cleanup()
         except Exception as e:
@@ -281,23 +291,51 @@ class Module(MultiProcessHelper):
                 kwargs.update(process.iterate["kwargs"])
                 self._run_iterations_in_parallel(process=process, *args, **kwargs)
             else:
-                output = process(*args, **kwargs)
-                if (len(process.outputs["args"]) != 1) and (
-                    len(output) != len(process.outputs["args"])
-                ):
-                    output_args = process.outputs["args"]
-                    raise ValueError(
-                        f"Output length does not match process output info: expected {output_args} ({len(output_args)}) but the process returned {len(output)} args"
+                args_str = "_".join([_get_representation(i) for i in args])
+                kwargs_str = "_".join(
+                    [f"{k}={_get_representation(v)}" for k, v in kwargs.items()]
+                )
+                file_name = f"{process.__name__}-{self.file_information_name}-{args_str}-{kwargs_str}"
+
+                success = self.create_process_file(
+                    process_name=process.__name__,
+                    file_name=file_name,
+                )
+                if success == False:
+                    logger.debug(f"File {file_name} already exists, skipping...")
+                    continue
+                try:
+                    output = process(*args, **kwargs)
+                    if (len(process.outputs["args"]) != 1) and (
+                        len(output) != len(process.outputs["args"])
+                    ):
+                        output_args = process.outputs["args"]
+                        raise ValueError(
+                            f"Output length does not match process output info: expected {output_args} ({len(output_args)}) but the process returned {len(output)} args"
+                        )
+                    for i, attr in enumerate(process.outputs["args"]):
+                        outi = output[i] if len(process.outputs["args"]) > 1 else output
+                        if attr is None:
+                            continue
+                        if hasattr(self, attr):
+                            logger.warning(f"Updating {attr}...")
+                            self.__setattr__(attr, outi)
+                        else:
+                            self.__setattr__(attr, outi)
+                except Exception as e:
+                    logger.exception(e)
+                    self.update_process_status(
+                        process_name=process.__name__,
+                        file_name=file_name,
+                        status="failed",
                     )
-                for i, attr in enumerate(process.outputs["args"]):
-                    outi = output[i] if len(process.outputs["args"]) > 1 else output
-                    if attr is None:
-                        continue
-                    if hasattr(self, attr):
-                        logger.warning(f"Updating {attr}...")
-                        self.__setattr__(attr, outi)
-                    else:
-                        self.__setattr__(attr, outi)
+                    raise e
+                else:
+                    self.update_process_status(
+                        process_name=process.__name__,
+                        file_name=file_name,
+                        status="finished",
+                    )
 
     def _run_iterations_in_parallel(
         self,
