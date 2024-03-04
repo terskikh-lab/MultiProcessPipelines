@@ -324,14 +324,14 @@ class Module(MultiProcessHelper):
                             self.__setattr__(attr, outi)
                 except Exception as e:
                     logger.exception(e)
-                    self.update_process_status(
+                    self.update_process_file(
                         process_name=process.__name__,
                         file_name=file_name,
                         status="failed",
                     )
                     raise e
                 else:
-                    self.update_process_status(
+                    self.update_process_file(
                         process_name=process.__name__,
                         file_name=file_name,
                         status="finished",
@@ -377,14 +377,14 @@ class Module(MultiProcessHelper):
                         file_name = futures_dict[future]
                         result = future.result()
                         logger.info(f"{label}: {result}")
-                        self.update_process_status(
+                        self.update_process_file(
                             process_name=process.__name__,
                             file_name=file_name,
                             status="finished",
                         )
                     except Exception as e:
                         logger.exception(e)
-                        self.update_process_status(
+                        self.update_process_file(
                             process_name=process.__name__,
                             file_name=file_name,
                             status="failed",
