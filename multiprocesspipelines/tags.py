@@ -1,4 +1,4 @@
-from typing import Callable, TypeVar, ParamSpec
+from typing import Callable, TypeVar, ParamSpec, Dict
 from functools import partial
 
 T = TypeVar("T")
@@ -82,4 +82,29 @@ def iterate(num_iters: int, seed: int, max_workers: int = 10):
         return func
 
     decorator.__name__ = "iterate"
+    return decorator
+
+
+def other_module_inputs(**kwargs):
+    """
+    Decorator to specify a processes inputs which come from another module in the pipeline, both positional and keyword arguments.
+
+    Parameters
+    ----------
+    *args
+        String names of the positional input arguments to pass to the process.
+    **kwargs
+        Keyword mapping of names from outputs of previous processes to keyword inputs of this process.
+    """
+
+    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        if hasattr(func, "inputs"):
+            raise AttributeError(f"inputs already specified for given process")
+        else:
+            func.other_module_inputs = {
+                "kwargs": kwargs,
+            }
+        return func
+
+    decorator.__name__ = "other_module_inputs"
     return decorator

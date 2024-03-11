@@ -1,26 +1,15 @@
 import logging
-import hashlib
-import pickle
-import os
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocesstools import MultiProcessHelper
-from typing import Union, Callable, Iterable
+from typing import Union, Callable, Iterable, Dict
 from functools import partial
 
+from .tools import _get_representation
 
 logger = logging.getLogger(__name__)
-
-
-def _get_representation(v):
-    if isinstance(v, (int, float, str, bool, type(None))):
-        return str(v)
-    elif isinstance(v, (list, tuple)) and len(v) <= 5:
-        return f"{type(v).__name__}({', '.join([_get_representation(i) for i in v])})"
-    else:
-        v_hash = hashlib.sha256(pickle.dumps(v)).hexdigest()[:10]
-        return f"{type(v).__name__}({v_hash})"
 
 
 def process_summary(process):
@@ -35,6 +24,10 @@ def process_summary(process):
         summary.append("\tkwargs:")
         for k, v in kwargs.items():
             summary.append(f"\t\t- {k}: {v}")
+    if hasattr(process, "other_module_inputs"):
+        summary.append("\tother_module_inputs:")
+        for k, v in process.other_module_inputs["kwargs"].items():
+            summary.append(f"\t\t- {k}: {v}")
     if hasattr(process, "iterate"):
         summary.append("\titerate kwargs:")
         for kwarg in process.iterate["kwargs"]:
@@ -42,45 +35,110 @@ def process_summary(process):
     if hasattr(process, "outputs"):
         summary.append("outputs:")
         for output in process.outputs["args"]:
-            summary.append(f"\t{output}")
+            summary.append(f"\t - {output}")
     return "\n".join(summary) + "\n"
 
 
-class Module(MultiProcessHelper):
+class ProcessOutputs:
+    def __init__(self):
+        self._outputs = {}
+
+    def __getitem__(self, key):
+        return self._outputs[key]
+
+    def __setitem__(self, key, value):
+        if key in self._outputs:
+            raise ValueError(f"Output {key} already exists in process outputs")
+        self._outputs[key] = value
+
+    def __getattr__(self, attr):
+        if attr in self.__dict__:
+            return self.__dict__[attr]
+        elif attr in self._outputs:
+            return self._outputs[attr]
+        else:
+            raise AttributeError(f"No such attribute: {attr}")
+
+    def track_process(self, process: Callable):
+        for input in process.inputs["args"]:
+            if input is None:
+                continue
+            if not hasattr(self, input):
+                raise ValueError(
+                    f"Output {input} not found in previous processes. Make sure to add the process dependencies to the module before tracking this process"
+                )
+        for input, attr_name in process.inputs["kwargs"]:
+            if not hasattr(self, attr_name):
+                raise ValueError(
+                    f"Output {attr_name} not found in previous processes. Make sure to add the process dependencies to the module before tracking this process"
+                )
+        for output in process.outputs["args"]:
+            self[output] = None
+
+    def __repr__(self):
+        repr_parts = ["ProcessOutputs:"]
+        for output, value in self._outputs.items():
+            repr_parts.append(f"\t{output}: {value}")
+        return "\n".join(repr_parts)
+
+    def merge(self, other):
+        for key, value in other._outputs.items():
+            if key not in self._outputs:
+                self._outputs[key] = value
+            elif self._outputs[key] != value:
+                if isinstance(self._outputs[key], list):
+                    self._outputs[key].append(value)
+                else:
+                    self._outputs[key] = [self._outputs[key], value]
+
+    @classmethod
+    def aggregate(cls, outputs_list):
+        merged = cls()
+        for outputs in outputs_list:
+            merged.merge(outputs)
+        return merged
+
+
+class Module:
 
     file_information_iterable: Iterable
 
     def __init__(
         self,
         name: str,
-        output_root_directory: str,
+        output_root_directory: Union[str, Path],
         loggers: list,
     ):
         if not isinstance(name, str):
             raise ValueError(f"name must be a string but {type(name)} was given")
-        if not isinstance(output_root_directory, str):
-            raise ValueError(
-                f"output_root_directory must be a string but {type(output_root_directory)} was given"
-            )
+        if not isinstance(output_root_directory, Path):
+            try:
+                output_root_directory = Path(output_root_directory)
+            except Exception as e:
+                logger.exception(e)
+                raise ValueError(
+                    f"output_root_directory must be a string or Path but {type(output_root_directory)} was given"
+                )
         if not isinstance(loggers, list):
             raise ValueError(f"loggers must be a list but {type(loggers)} was given")
         loggers = [__name__, "MultiProcessTools", *loggers]
-        super().__init__(
+
+        self.module_output_directory: Path = output_root_directory / name
+        self.module_output_directory.mkdir(parents=True, exist_ok=True)
+
+        self.multiprocesshelper = MultiProcessHelper(
             name=name,
-            output_root=output_root_directory,
+            output_root=self.module_output_directory / "multiprocesshelper",
             logger_names=loggers,
         )
         self.name = name
-        self.create_directory(self.name)
-        self._processes = {}
+        self._processes: Dict = {}
+        self.other_module_inputs: Dict = {}
+        self.outputs: ProcessOutputs = ProcessOutputs()
 
     @property
-    def output_root_directory(self):
-        return self.directories["working_directory"]
-
-    @property
-    def module_directory(self):
-        return self.get_directory(self.name)
+    def multiprocesshelper_directory(self) -> Path:
+        return self.multiprocesshelper.get_directory("working_directory")
 
     @property
     def methods_list(self):
@@ -93,6 +151,11 @@ class Module(MultiProcessHelper):
     @property
     def processes_list(self):
         return [process for process in self._processes.keys()]
+
+    @property
+    def process_outputs(self):
+        all_outputs = list([*self.outputs.keys()])
+        return all_outputs
 
     def set_file_information_iterable(self, function, *args, **kwargs):
         if isinstance(function, Callable):
@@ -143,7 +206,7 @@ class Module(MultiProcessHelper):
                 prior_names.append(file_information_name)
             logger.info(f"{function.__name__} is a viable file_information_iterable")
 
-            self.track_process("file_information_iterable")
+            self.multiprocesshelper.track_process("file_information_iterable")
 
         else:
             raise ValueError(
@@ -156,13 +219,21 @@ class Module(MultiProcessHelper):
             partial_func.__name__ = function.__name__
             # Rather than partial init just create a kwargs and args attr
             # that way we can make them mutable and keep original func methods (like func.__code__)
-            if hasattr(function, "inputs") and hasattr(function, "outputs"):
+            if hasattr(function, "inputs"):
                 partial_func.inputs = function.inputs
+            if hasattr(function, "other_module_inputs"):
+                partial_func.other_module_inputs = function.other_module_inputs
+                self.other_module_inputs[function.__name__] = (
+                    function.other_module_inputs
+                )
+            if not (
+                hasattr(function, "inputs") or hasattr(function, "other_module_inputs")
+            ):
+                raise AttributeError(f"inputs not specified for given process")
+            if hasattr(function, "outputs"):
                 partial_func.outputs = function.outputs
             else:
-                raise AttributeError(
-                    f"inputs or outputs not specified for given process"
-                )
+                raise AttributeError(f"outputs not specified for given process")
             if hasattr(function, "iterate"):
                 partial_func.iterate = function.iterate
             if len(self.processes_list) == 0:
@@ -174,7 +245,8 @@ class Module(MultiProcessHelper):
                         f"First process must have 'file_information' in inputs"
                     )
             self._processes[function.__name__] = partial_func
-            self.track_process(function.__name__)
+            self.multiprocesshelper.track_process(function.__name__)
+            self.outputs.track_process(partial_func)
         else:
             raise ValueError(
                 f"function must be a Callable but {type(function)} was given"
@@ -215,7 +287,7 @@ class Module(MultiProcessHelper):
                 self.file_information_iterable, f"{self.name} progress"
             ):
                 file_name = f"{file_information_name}_{self.name}"
-                success = self.create_process_file(
+                success = self.multiprocesshelper.create_process_file(
                     process_name="file_information_iterable", file_name=file_name
                 )
                 if success == False:
@@ -228,26 +300,27 @@ class Module(MultiProcessHelper):
                     self._run_all_processes()
                 except Exception as e:
                     logger.exception(e)
-                    self.update_process_file(
+                    self.multiprocesshelper.update_process_file(
                         process_name="file_information_iterable",
                         file_name=file_name,
                         status="failed",
                     )
                     continue
                 else:
-                    self.update_process_file(
+                    self.multiprocesshelper.update_process_file(
                         process_name="file_information_iterable",
                         file_name=file_name,
                         status="finished",
                     )
-            logger.info(f"Finished running {self.name}, cleaning up...")
-            self.cleanup()
+            logger.info(f"cleaning up...")
+            self.multiprocesshelper.cleanup()
+            logger.info(f"Finished running {self.name}")
         except Exception as e:
             logger.exception(e)
             logger.error("An exception occurred, cleaning up...")
-            self.cleanup()
+            self.multiprocesshelper.cleanup()
 
-    def _run_all_processes(self):
+    def _run_all_processes(self, other_module_inputs: Dict):
         if len(self._processes) == 0:
             raise ValueError("No processes specified")
         for i, (name, process) in enumerate(self._processes.items()):
@@ -258,26 +331,42 @@ class Module(MultiProcessHelper):
             # and the outputs to update the attributes of the module
 
             args = []
-            for arg in process.inputs["args"]:
-                if arg is None:
-                    continue
-                if hasattr(self, arg):
-                    args.append(self.__getattribute__(arg))
-                else:
-                    raise AttributeError(
-                        f"Invalid input: {arg}. {arg} does not exist as an attribute. There may be an issue with the previous process output decorator"
-                    )
-
             kwargs = {}
-            for process_kwarg, attr_name in process.inputs["kwargs"]:
-                # if process_kwarg is None:
-                #     continue
-                if hasattr(self, attr_name):
-                    kwargs[process_kwarg] = self.__getattribute__(attr_name)
-                else:
-                    raise AttributeError(
-                        f"Invalid input: {process_kwarg}={attr_name}. {attr_name} does not exist as an attribute. There may be an issue with the previous process output decorator"
-                    )
+
+            if hasattr(process, "inputs"):
+                for arg in process.inputs["args"]:
+                    if arg is None:
+                        continue
+                    assert hasattr(
+                        self.outputs, arg
+                    ), "ProcessOutputs not properly adding args when calling track_process"
+                    assert (
+                        self.outputs[arg] is not None
+                    ), f"ProcessOutputs not properly updating args: Output {arg} is None"
+                    args.append(self.outputs[arg])
+                for process_kwarg, attr_name in process.inputs["kwargs"]:
+                    assert hasattr(
+                        self.outputs, attr_name
+                    ), "ProcessOutputs not properly adding kwargs when calling track_process"
+                    assert (
+                        self.outputs[attr_name] is not None
+                    ), f"ProcessOutputs not properly updating kwargs: Output {attr_name} is None"
+                    kwargs[process_kwarg] = self.outputs[attr_name]
+
+            if hasattr(process, "other_module_inputs"):
+                for (
+                    process_kwarg,
+                    other_module_kwargname,
+                ) in process.other_module_inputs["kwargs"]:
+                    if other_module_kwargname in other_module_inputs.keys():
+                        kwargs[process_kwarg] = other_module_inputs[
+                            other_module_kwargname
+                        ]
+                    else:
+                        raise AttributeError(
+                            f"Other module input not specified for process {process.name} ({process_kwarg}={other_module_kwargname}). other_module_inputs = {other_module_inputs}"
+                        )
+
             if hasattr(process, "iterate"):
                 if any(i in kwargs.keys() for i in process.iterate["kwargs"].keys()):
                     overlapping = [
@@ -297,7 +386,7 @@ class Module(MultiProcessHelper):
                 )
                 file_name = f"{process.__name__}-{self.file_information_name}-{args_str}-{kwargs_str}"
 
-                success = self.create_process_file(
+                success = self.multiprocesshelper.create_process_file(
                     process_name=process.__name__,
                     file_name=file_name,
                 )
@@ -324,14 +413,14 @@ class Module(MultiProcessHelper):
                             self.__setattr__(attr, outi)
                 except Exception as e:
                     logger.exception(e)
-                    self.update_process_file(
+                    self.multiprocesshelper.update_process_file(
                         process_name=process.__name__,
                         file_name=file_name,
                         status="failed",
                     )
                     raise e
                 else:
-                    self.update_process_file(
+                    self.multiprocesshelper.update_process_file(
                         process_name=process.__name__,
                         file_name=file_name,
                         status="finished",
@@ -358,7 +447,7 @@ class Module(MultiProcessHelper):
                 futures_dict = {}
                 for i in np.arange(num_iters):
                     file_name = f"{label}_iter{i}"
-                    success = self.create_process_file(
+                    success = self.multiprocesshelper.create_process_file(
                         process_name=process.__name__,
                         file_name=file_name,
                     )
@@ -377,14 +466,14 @@ class Module(MultiProcessHelper):
                         file_name = futures_dict[future]
                         result = future.result()
                         logger.info(f"{label}: {result}")
-                        self.update_process_file(
+                        self.multiprocesshelper.update_process_file(
                             process_name=process.__name__,
                             file_name=file_name,
                             status="finished",
                         )
                     except Exception as e:
                         logger.exception(e)
-                        self.update_process_file(
+                        self.multiprocesshelper.update_process_file(
                             process_name=process.__name__,
                             file_name=file_name,
                             status="failed",
@@ -392,7 +481,7 @@ class Module(MultiProcessHelper):
                 executor.shutdown(wait=True)
         except Exception as e:
             logger.error(e.with_traceback())
-            self.cleanup()
+            self.multiprocesshelper.cleanup()
             if not isinstance(e, KeyError):
                 raise e
         finally:
