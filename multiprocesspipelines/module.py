@@ -75,12 +75,6 @@ class ProcessOutputs:
         for output in process.outputs["args"]:
             self[output] = None
 
-    def __repr__(self):
-        repr_parts = ["ProcessOutputs:"]
-        for output, value in self._outputs.items():
-            repr_parts.append(f"\t{output}: {value}")
-        return "\n".join(repr_parts)
-
     def merge(self, other):
         for key, value in other._outputs.items():
             if key not in self._outputs:
@@ -97,6 +91,12 @@ class ProcessOutputs:
         for outputs in outputs_list:
             merged.merge(outputs)
         return merged
+
+    def __repr__(self):
+        repr_parts = ["ProcessOutputs:"]
+        for output, value in self._outputs.items():
+            repr_parts.append(f"\t{output}: {value}")
+        return "\n".join(repr_parts)
 
 
 class Module:
@@ -157,61 +157,54 @@ class Module:
         all_outputs = list([*self.outputs.keys()])
         return all_outputs
 
-    def set_file_information_iterable(self, function, *args, **kwargs):
-        if isinstance(function, Callable):
-            if hasattr(function, "outputs"):
-                if "file_information_iterable" not in function.outputs["args"]:
-                    raise ValueError(
-                        "file_information_iterable must have 'file_information_iterable' in outputs"
-                    )
-            else:
-                raise AttributeError(
-                    f"outputs not specified for file_information_iterable (NOTE: file_information_iterable must have 'file_information_iterable' in outputs)"
-                )
-            outputs = function(*args, **kwargs)
-            if (len(outputs) != len(function.outputs["args"])) and (
-                len(function.outputs["args"] > 1)
-            ):
-                raise ValueError(
-                    f"Output length does not match process output info: expected {function.outputs['args']} ({len(function.outputs['args'])}) but the process returned {len(outputs)} args"
-                )
-            for attr, val in zip(function.outputs["args"], outputs):
-                if attr is None:
-                    continue
-                if hasattr(self, attr):
-                    raise ValueError(
-                        f"file_information_iterable cannot have overlapping outputs with other processes. Overlapping output: {attr}"
-                    )
-                self.__setattr__(attr, val)
-            assert hasattr(self, "file_information_iterable")
-
-            prior_names = []
-            for i, item in tqdm(
-                enumerate(self.file_information_iterable),
-                f"Checking {function.__name__} viability",
-            ):
-                if len(item) != 2:
-                    raise ValueError(
-                        f"file_information_iterable must return a tuple of length 2 but {len(item)} was returned"
-                    )
-                file_information_name, file_information = item
-                if not isinstance(file_information_name, str):
-                    raise ValueError(
-                        f"file_information_name must be a string but {type(file_information_name)} was given"
-                    )
-                if file_information_name in prior_names:
-                    raise ValueError(
-                        f"file_information_name must be unique but {file_information_name} was repeated"
-                    )
-                prior_names.append(file_information_name)
-            logger.info(f"{function.__name__} is a viable file_information_iterable")
-
-            self.multiprocesshelper.track_process("file_information_iterable")
-
-        else:
+    def file_info_generator(self, function, *args, **kwargs):
+        if not isinstance(function, Callable):
             raise ValueError(
                 f"function must be a Callable but {type(function)} was given"
             )
+        if not hasattr(function, "outputs"):
+            raise AttributeError(
+                f"outputs not specified for file_information_iterable (NOTE: file_information_iterable must have 'file_information_iterable' in outputs)"
+            )
+        if "file_information_iterable" not in function.outputs["args"]:
+            raise ValueError(
+                "file_information_iterable must have 'file_information_iterable' in outputs"
+            )
+
+        outputs = function(*args, **kwargs)
+        if (len(outputs) != len(function.outputs["args"])) and (
+            len(function.outputs["args"] > 1)
+        ):
+            raise ValueError(
+                f"Output length does not match process output info: expected {function.outputs['args']} ({len(function.outputs['args'])}) but the process returned {len(outputs)} args"
+            )
+
+        self.outputs.track_process(function)
+
+        assert hasattr(self.outputs, "file_information_iterable")
+        prior_names = []
+        for i, item in tqdm(
+            enumerate(self.outputs["file_information_iterable"]),
+            f"Checking {function.__name__} viability",
+        ):
+            if len(item) != 2:
+                raise ValueError(
+                    f"file_information_iterable must return a tuple of length 2 but {len(item)} was returned"
+                )
+            file_information_name, file_information = item
+            if not isinstance(file_information_name, str):
+                raise ValueError(
+                    f"file_information_name must be a string but {type(file_information_name)} was given"
+                )
+            if file_information_name in prior_names:
+                raise ValueError(
+                    f"file_information_name must be unique but {file_information_name} was repeated"
+                )
+            prior_names.append(file_information_name)
+
+        logger.info(f"{function.__name__} is a viable file_information_iterable")
+
+        self.multiprocesshelper.track_process("file_information_iterable")
 
     def add_process(self, function: Callable, *args, **kwargs):
         if isinstance(function, Callable):
@@ -284,7 +277,7 @@ class Module:
         # initialize run information
         try:
             for file_information_name, file_information in tqdm(
-                self.file_information_iterable, f"{self.name} progress"
+                self.outputs["file_information_iterable"], f"{self.name} progress"
             ):
                 file_name = f"{file_information_name}_{self.name}"
                 success = self.multiprocesshelper.create_process_file(
