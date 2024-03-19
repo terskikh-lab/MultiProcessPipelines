@@ -22,7 +22,7 @@ class Pipeline:
     ):
         if not isinstance(name, str):
             raise ValueError(f"name must be a string but {type(name)} was given")
-        if isinstance(output_root_directory, Path):
+        if not isinstance(output_root_directory, Path):
             try:
                 output_root_directory = Path(output_root_directory)
             except Exception as e:
@@ -238,15 +238,21 @@ class Pipeline:
 
     def __repr__(self):
         repr_parts = [f"\nPipeline: {self.name}"]
-        
+
         repr_parts.append("Module io connections:")
         for module_name, io_connections in self._modules_io_connections.items():
             repr_parts.append(f"Module {module_name} io connections:")
             for output_name, input_connections in io_connections.items():
                 repr_parts.append(f"\tOutput {output_name}:")
-                for input_module_name, input_process_connections in input_connections.items():
+                for (
+                    input_module_name,
+                    input_process_connections,
+                ) in input_connections.items():
                     repr_parts.append(f"\t\tInput module {input_module_name}:")
-                    for input_process_name, input_process_kwarg in input_process_connections.items():
+                    for (
+                        input_process_name,
+                        input_process_kwarg,
+                    ) in input_process_connections.items():
                         repr_parts.append(
                             f"\t\tProcess {input_process_name} kwarg {input_process_kwarg}"
                         )
