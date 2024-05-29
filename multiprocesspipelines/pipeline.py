@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from typing import Union, Callable, Iterable, Dict
 from functools import partial
 
-from .module import Module, ProcessOutputs
+from .module import Module, ModuleOutputs
 from .tools import _get_representation, format_module_parallel_execution_repr
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class Pipeline:
         max_workers: int = None,
         executor_kwargs: dict = {},
     ):
-        if not isinstance(function, Module):
+        if not isinstance(module, Module):
             raise ValueError(
                 f"function must be a Callable but {type(function)} was given"
             )
@@ -130,7 +130,7 @@ class Pipeline:
                                     and {other_module_name} output {other_module_kwargname}"
                         )
 
-                    self._modules[module.name] = module
+        self._modules[module.name] = module
 
     def run(self):
         logger.info(f"Running {self.name}...")
@@ -159,9 +159,9 @@ class Pipeline:
                                 other_module_str_info.split(".")
                             )
                             other_module = self._modules[other_module_name]
-                            other_module_kwargval = other_module.__getattribute__(
+                            other_module_kwargval = other_module.outputs[
                                 other_module_kwargname
-                            )
+                            ]
                             process_other_module_input_kwargs[
                                 this_process_kwargname
                             ] = other_module_kwargval
@@ -228,7 +228,7 @@ class Pipeline:
                 exe.shutdown(wait=True)
             logger.info(f"Finished running {module.name} in parallel")
             logger.info(f"Aggregating {module.name} outputs...")
-            aggregated_outputs = ProcessOutputs().aggregate(finished_modules_outputs)
+            aggregated_outputs = ModuleOutputs().aggregate(finished_modules_outputs)
             module.outputs = aggregated_outputs
             logger.info(f"Finished aggregating {module.name} outputs")
             return module
@@ -238,15 +238,21 @@ class Pipeline:
 
     def __repr__(self):
         repr_parts = [f"\nPipeline: {self.name}"]
-        
+
         repr_parts.append("Module io connections:")
         for module_name, io_connections in self._modules_io_connections.items():
             repr_parts.append(f"Module {module_name} io connections:")
             for output_name, input_connections in io_connections.items():
                 repr_parts.append(f"\tOutput {output_name}:")
-                for input_module_name, input_process_connections in input_connections.items():
+                for (
+                    input_module_name,
+                    input_process_connections,
+                ) in input_connections.items():
                     repr_parts.append(f"\t\tInput module {input_module_name}:")
-                    for input_process_name, input_process_kwarg in input_process_connections.items():
+                    for (
+                        input_process_name,
+                        input_process_kwarg,
+                    ) in input_process_connections.items():
                         repr_parts.append(
                             f"\t\tProcess {input_process_name} kwarg {input_process_kwarg}"
                         )

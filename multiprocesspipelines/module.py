@@ -39,16 +39,21 @@ def process_summary(process):
     return "\n".join(summary) + "\n"
 
 
-class ProcessOutputs:
+class ModuleOutputs:
     def __init__(self):
         self._outputs = {}
 
     def __getitem__(self, key):
         return self._outputs[key]
 
+    def keys(self):
+        return self._outputs.keys()
+
     def __setitem__(self, key, value):
         if key in self._outputs:
-            raise ValueError(f"Output {key} already exists in process outputs")
+            logger.warning(f"Overwriting {key}...")
+            logger.debug(f"Old value: {self._outputs[key]}")
+            logger.debug(f"New value: {value}")
         self._outputs[key] = value
 
     def __getattr__(self, attr):
@@ -60,18 +65,19 @@ class ProcessOutputs:
             raise AttributeError(f"No such attribute: {attr}")
 
     def track_process(self, process: Callable):
-        for input in process.inputs["args"]:
-            if input is None:
-                continue
-            if not hasattr(self, input):
-                raise ValueError(
-                    f"Output {input} not found in previous processes. Make sure to add the process dependencies to the module before tracking this process"
-                )
-        for input, attr_name in process.inputs["kwargs"]:
-            if not hasattr(self, attr_name):
-                raise ValueError(
-                    f"Output {attr_name} not found in previous processes. Make sure to add the process dependencies to the module before tracking this process"
-                )
+        if hasattr(process, "inputs"):
+            for input in process.inputs["args"]:
+                if input is None:
+                    continue
+                if not input in self._outputs.keys():
+                    raise ValueError(
+                        f"Output {input} not found in previous processes. Make sure to add the process dependencies to the module before tracking this process"
+                    )
+            for input, attr_name in process.inputs["kwargs"].items():
+                if not attr_name in self._outputs.keys():
+                    raise ValueError(
+                        f"Output {attr_name} not found in previous processes. Make sure to add the process dependencies to the module before tracking this process"
+                    )
         for output in process.outputs["args"]:
             self[output] = None
 
@@ -93,7 +99,7 @@ class ProcessOutputs:
         return merged
 
     def __repr__(self):
-        repr_parts = ["ProcessOutputs:"]
+        repr_parts = ["ModuleOutputs:"]
         for output, value in self._outputs.items():
             repr_parts.append(f"\t{output}: {value}")
         return "\n".join(repr_parts)
@@ -134,7 +140,8 @@ class Module:
         self.name = name
         self._processes: Dict = {}
         self.other_module_inputs: Dict = {}
-        self.outputs: ProcessOutputs = ProcessOutputs()
+        self.outputs: ModuleOutputs = ModuleOutputs()
+        self.outputs["module_directory"] = self.module_output_directory
 
     @property
     def multiprocesshelper_directory(self) -> Path:
@@ -179,9 +186,12 @@ class Module:
                 f"Output length does not match process output info: expected {function.outputs['args']} ({len(function.outputs['args'])}) but the process returned {len(outputs)} args"
             )
 
-        self.outputs.track_process(function)
+        for i, attr in enumerate(function.outputs["args"]):
+            outi = outputs[i] if len(function.outputs["args"]) > 1 else outputs
+            if attr is None:
+                continue
+            self.outputs[attr] = outi
 
-        assert hasattr(self.outputs, "file_information_iterable")
         prior_names = []
         for i, item in tqdm(
             enumerate(self.outputs["file_information_iterable"]),
@@ -203,7 +213,8 @@ class Module:
             prior_names.append(file_information_name)
 
         logger.info(f"{function.__name__} is a viable file_information_iterable")
-
+        self.outputs["file_information"] = None
+        self.outputs["file_information_name"] = None
         self.multiprocesshelper.track_process("file_information_iterable")
 
     def add_process(self, function: Callable, *args, **kwargs):
@@ -332,18 +343,18 @@ class Module:
                         continue
                     assert hasattr(
                         self.outputs, arg
-                    ), "ProcessOutputs not properly adding args when calling track_process"
+                    ), "ModuleOutputs not properly adding args when calling track_process"
                     assert (
                         self.outputs[arg] is not None
-                    ), f"ProcessOutputs not properly updating args: Output {arg} is None"
+                    ), f"ModuleOutputs not properly updating args: Output {arg} is None"
                     args.append(self.outputs[arg])
                 for process_kwarg, attr_name in process.inputs["kwargs"]:
                     assert hasattr(
                         self.outputs, attr_name
-                    ), "ProcessOutputs not properly adding kwargs when calling track_process"
+                    ), "ModuleOutputs not properly adding kwargs when calling track_process"
                     assert (
                         self.outputs[attr_name] is not None
-                    ), f"ProcessOutputs not properly updating kwargs: Output {attr_name} is None"
+                    ), f"ModuleOutputs not properly updating kwargs: Output {attr_name} is None"
                     kwargs[process_kwarg] = self.outputs[attr_name]
 
             if hasattr(process, "other_module_inputs"):
