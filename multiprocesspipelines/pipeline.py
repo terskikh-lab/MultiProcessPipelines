@@ -22,7 +22,7 @@ class Pipeline:
     ):
         if not isinstance(name, str):
             raise ValueError(f"name must be a string but {type(name)} was given")
-        if isinstance(output_root_directory, Path):
+        if not isinstance(output_root_directory, Path):
             try:
                 output_root_directory = Path(output_root_directory)
             except Exception as e:
